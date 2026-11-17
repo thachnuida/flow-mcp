@@ -91,11 +91,12 @@ async function readCredits(page: Page): Promise<number | undefined> {
   await dismissOverlays(page);
   await scrollToTop(page);
   await page.getByRole("button", { name: "Account details" }).click({ timeout: 5000 });
-  const link = page.getByRole("link", { name: /Google Flow credits/ });
+  // The panel can list two balances, "<N> Google Flow credits" and "<N> AI credits"; both can be spent, so add them up.
+  const balanceLinks = page.getByRole("link", { name: /^[\d,]+\s+(AI|Google Flow) credits$/ });
   try {
-    await link.waitFor({ state: "visible", timeout: 5000 });
-    const n = Number((await link.innerText()).replace(/[^\d]/g, ""));
-    return Number.isNaN(n) ? undefined : n;
+    await balanceLinks.first().waitFor({ state: "visible", timeout: 5000 });
+    const counts = (await balanceLinks.allInnerTexts()).map((t) => Number(t.replace(/[^\d]/g, ""))).filter((n) => !Number.isNaN(n));
+    return counts.length ? counts.reduce((a, b) => a + b, 0) : undefined;
   } finally {
     await dismissOverlays(page);
     await pause(page, 300);
