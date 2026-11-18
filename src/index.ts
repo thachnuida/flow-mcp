@@ -109,6 +109,18 @@ server.registerTool(
 );
 
 server.registerTool(
+  "flow_quote",
+  {
+    title: "Quote Flow credits for a scene",
+    description:
+      "Ask Flow what a scene would cost in credits, without generating anything: applies the scene's settings (type, model, aspect ratio, duration, resolution, variants) in the Flow tab, reads the live quote and stops. Nothing is uploaded, typed or started, and nothing is spent. Queued like a generation (one at a time, paced), so it may wait behind running jobs. Images always cost 0. Returns { credits }.",
+    inputSchema: shapes.quote,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  (args) => reply(patient("flow_quote", core.quote(args))),
+);
+
+server.registerTool(
   "flow_wait",
   {
     title: "Wait for Flow jobs",

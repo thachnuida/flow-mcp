@@ -1145,6 +1145,20 @@ async function ensureProjectGrid(page: Page): Promise<void> {
   await scrollToTop(page);
 }
 
+// Reads the credit quote Flow shows for a scene's settings and stops there: no uploads, no typing, no Start click.
+// Stores it in job.credits (the same field a real generation fills) and returns no files. UNVERIFIED against live
+// Flow: it only reuses the settings step runGeneration already runs before it uploads anything.
+export async function runQuote(job: Job): Promise<string[]> {
+  const state = await getFlowState();
+  if (!state.signedIn || !state.inProject) throw new Error(state.hint);
+  const page = await getFlowPage();
+  await ensureProjectGrid(page);
+  const agent = page.getByRole("button", { name: "Agent", exact: true });
+  if ((await agent.getAttribute("aria-pressed")) === "true") await agent.click();
+  job.credits = await applySettings(page, job);
+  return [];
+}
+
 // Drives one generation in the Flow tab and returns the downloaded file paths.
 export async function runGeneration(job: Job): Promise<string[]> {
   const state = await getFlowState();

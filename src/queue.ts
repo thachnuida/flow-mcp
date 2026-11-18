@@ -28,6 +28,8 @@ export interface SceneParams {
   agent_scene_refs?: string[][];
   // Flow asset names of agent_refs after upload, so a retry round re-attaches without uploading again.
   agent_ref_assets?: string[];
+  // Read Flow's credit quote for these settings and stop: nothing is uploaded, typed or started (flow_quote).
+  quote_only?: boolean;
   continue_from?: string;
   attach?: string[];
   continue_mode?: "exact" | "likeness";

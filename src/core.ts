@@ -9,7 +9,7 @@ import { KOKORO_DEFAULT_VOICE, KOKORO_MB, KOKORO_VOICES, kokoroReady, speakWithK
 import { extractFirstFrame, extractFrameAt, extractLastFrame } from "./chain.js";
 import { burnCaptions, captionedName, captionSetup, previewCaptions, transcribe } from "./captions.js";
 import { presenter } from "./presenter.js";
-import { characterLook, createCharacter, createProject, downloadAsset, downloadCollection, trashAsset, editCharacter, getFlowState, listAssets, forgetCharacter, listCharacters, rememberCharacter, runAgentBatch, runContinue, runEdit, runGeneration } from "./flow.js";
+import { characterLook, createCharacter, createProject, downloadAsset, downloadCollection, trashAsset, editCharacter, getFlowState, listAssets, forgetCharacter, listCharacters, rememberCharacter, runAgentBatch, runContinue, runEdit, runGeneration, runQuote } from "./flow.js";
 import { JobQueue, type Job } from "./queue.js";
 import { BIN, COMPUTER, moveToBin } from "./platform.js";
 import { TECHNIQUES, techniqueById } from "./techniques.js";
@@ -126,6 +126,7 @@ export const shapes = {
     project: z.string().min(1).describe("Folder name for the downloaded clips, e.g. 'HotelPromo'."),
     scenes: z.array(sceneSchema).min(1).max(100),
   },
+  quote: { scene: sceneSchema.describe("One scene exactly as in flow_generate; only its settings (type, model, aspect_ratio, duration, resolution, variants, frames) matter.") },
   wait: {
     job_ids: z.array(z.string()).optional().describe("Job ids from a queued call, or the task_id of a call that answered still_working. Default: every queued job."),
     timeout_seconds: z.number().int().min(5).max(900).default(40).describe("An MCP call returns after at most 40 s whatever this says, so call again until finished is true."),
@@ -438,6 +439,7 @@ export const jobView = ({ id, status, params, files, attempts, credits, progress
 export interface Core {
   status(a: Args<"status">): Promise<unknown>;
   generate(a: Args<"generate">): Promise<unknown>;
+  quote(a: Args<"quote">): Promise<unknown>;
   wait(a: Args<"wait">): Promise<unknown>;
   cancel(a: Args<"cancel">): Promise<unknown>;
   retry(a: Args<"retry">): Promise<unknown>;
@@ -488,6 +490,7 @@ const BUSY = "A generation is running in the Flow tab. Wait for it to finish (fl
 
 export class LocalCore implements Core {
   private queue: JobQueue = new JobQueue(async (job) => {
+    if (job.params.quote_only) return runQuote(job);
     const { chain_from, reference_from } = job.params;
     if (reference_from) {
       const still = this.queue.get(reference_from)?.files.find((f) => /\.(jpe?g|png|webp)$/i.test(f));
@@ -575,6 +578,17 @@ export class LocalCore implements Core {
     return { output_dir, jobs: jobs.map(jobView) };
   }
 
+  // Flow's credit quote for one scene's settings, without generating anything. Goes through the queue like a
+  // generation, so it is paced and never overlaps one. Images are always free (0), so they never touch Flow.
+  async quote({ scene }: Args<"quote">) {
+    if (scene.type === "image") return { credits: 0 };
+    const { chain_previous, reference_previous, technique, outfit, on_screen_text, ...settings } = scene;
+    const job = this.queue.add({ ...settings, quote_only: true, output_dir: OUTPUT_ROOT, file_stem: "quote" });
+    while (job.status === "queued" || job.status === "running") await new Promise((r) => setTimeout(r, 1000));
+    if (job.status !== "done") throw new Error(job.error ?? `Quote job ${job.status}.`);
+    return { credits: job.credits ?? 0 };
+  }
+
   async wait({ job_ids, timeout_seconds }: Args<"wait">) {
     const pick = () => (job_ids ? job_ids.map((id) => this.queue.get(id)).filter((j): j is Job => Boolean(j)) : this.queue.list());
     const deadline = Date.now() + timeout_seconds * 1000;
@@ -596,7 +610,7 @@ export class LocalCore implements Core {
   }
 
   async retry({ job_ids }: Args<"retry">) {
-    const ids = job_ids ?? this.queue.list().filter((j) => j.status === "failed" || j.failed_scenes?.length).map((j) => j.id);
+    const ids = job_ids ?? this.queue.list().filter((j) => !j.params.quote_only && (j.status === "failed" || j.failed_scenes?.length)).map((j) => j.id);
     const jobs: Job[] = [];
     for (const id of ids) {
       const job = this.queue.get(id);
