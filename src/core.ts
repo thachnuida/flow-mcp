@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { classify } from "./errors.js";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
@@ -428,6 +429,8 @@ export const jobView = ({ id, status, params, files, attempts, credits, progress
   files,
   note,
   error,
+  // Machine-readable reason, set whenever status is "failed" (see errors.ts).
+  code: status === "failed" ? classify(error ?? "") : undefined,
   failed_scenes,
 });
 

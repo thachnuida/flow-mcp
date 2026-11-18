@@ -176,6 +176,11 @@ async function errorReason(page: Page): Promise<string> {
 }
 const POLICY = /polic|violat|prominent|safety|not allowed|guideline/i;
 
+// Flow throttles accounts it thinks are automated and says so in plain words ("unusual activity"). Nothing was
+// generated, so retrying at once only prolongs it. Checked against text already read from the page (error tile / page).
+const RATE_LIMITED = /unusual activity/i;
+const RATE_LIMIT_MESSAGE = 'Flow is rate-limiting this account ("unusual activity"). Nothing was generated. Wait before retrying.';
+
 // Flow's Retry replaces the failed tile with a fresh render of the same prompt and settings, free of charge.
 // Tiles produced by Agent mode only offer Delete, so the button may not be there at all.
 async function retryErrorTile(page: Page, tile: Locator): Promise<boolean> {
@@ -301,6 +306,7 @@ async function waitForNewMedia(page: Page, before: string[], count: number, time
     if (!errors) continue;
     failures += errors;
     const reason = await errorReason(page);
+    if (RATE_LIMITED.test(reason)) throw new Error(RATE_LIMIT_MESSAGE);
     if (POLICY.test(reason)) {
       const hint = /prominent|public figure|celebrit/i.test(reason)
         ? " Flow thinks a face in this scene looks like a real, well-known person, usually one from an uploaded photo or a character made from one. Retrying will not change that: use a character drawn from a description (flow_character with `describe`) instead."
@@ -316,6 +322,8 @@ async function waitForNewMedia(page: Page, before: string[], count: number, time
     if (fresh.length) return fresh;
     throw new Error(`Flow failed this generation ${failures} time(s) ("${reason || "Sorry, this image/video failed to generate"}"). Nothing was charged. Try again later or reword the prompt.`);
   }
+  const pageText = await page.locator("body").innerText().catch(() => "");
+  if (RATE_LIMITED.test(pageText)) throw new Error(RATE_LIMIT_MESSAGE);
   throw new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s waiting for Flow to finish.`);
 }
 
