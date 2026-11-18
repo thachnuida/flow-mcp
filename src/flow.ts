@@ -1025,7 +1025,10 @@ async function downloadTile(page: Page, target: Locator | TileResolver, targetSt
   await useOwnDownloadDir(page);
   const resolve: TileResolver = typeof target === "function" ? target : async () => target;
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // Only the menu + download is retried. Once a file has arrived, moving it is NOT retried: a failed move (EPERM, locked
+  // destination, missing folder) would just re-download the same clip twice more.
+  let file: string | undefined;
+  for (let attempt = 0; attempt < 3 && !file; attempt++) {
     try {
       const tile = await resolve();
       const before = downloadsNow();
@@ -1051,25 +1054,25 @@ async function downloadTile(page: Page, target: Locator | TileResolver, targetSt
         await wanted.click();
       }
       // Upscales are rendered on demand, so they can take minutes to appear.
-      const file = await waitForDownloadedFile(page, before, quality === "upscaled" ? 600_000 : 180_000);
-      const kind = extensionOf(file);
-      let saved: string[];
-      if (kind === ".zip") saved = unpackTakes(file, targetStem);
-      else {
-        const target = `${targetStem}${kind}`;
-        moveFile(file, target);
-        saved = [target];
-      }
-      await page.keyboard.press("Escape");
-      await scrollToTop(page);
-      return saved;
+      file = await waitForDownloadedFile(page, before, quality === "upscaled" ? 600_000 : 180_000);
     } catch (err) {
       lastError = err;
       await page.keyboard.press("Escape").catch(() => {});
       await pause(page, 2000);
     }
   }
-  throw lastError;
+  if (!file) throw lastError;
+  const kind = extensionOf(file);
+  let saved: string[];
+  if (kind === ".zip") saved = unpackTakes(file, targetStem);
+  else {
+    const target = `${targetStem}${kind}`;
+    moveFile(file, target);
+    saved = [target];
+  }
+  await page.keyboard.press("Escape").catch(() => {});
+  await scrollToTop(page);
+  return saved;
 }
 
 // The left-hand "Project navigation" (All media, Images, Videos, Characters...). Its Collapse button (a setting Flow

@@ -486,6 +486,7 @@ export const VOICES = [
   { name: "Iapetus", description: "male, clear, mid-low pitch" },
 ];
 
+const QUOTE_TIMEOUT_MS = 15 * 60_000;
 const BUSY = "A generation is running in the Flow tab. Wait for it to finish (flow_wait), then retry.";
 
 export class LocalCore implements Core {
@@ -583,8 +584,18 @@ export class LocalCore implements Core {
   async quote({ scene }: Args<"quote">) {
     if (scene.type === "image") return { credits: 0 };
     const { chain_previous, reference_previous, technique, outfit, on_screen_text, ...settings } = scene;
-    const job = this.queue.add({ ...settings, quote_only: true, output_dir: OUTPUT_ROOT, file_stem: "quote" });
-    while (job.status === "queued" || job.status === "running") await new Promise((r) => setTimeout(r, 1000));
+    // Settings carry first_frame/last_frame as given, so the quote uses Frames mode like the real job. A chained scene
+    // gets its first frame from the previous clip at run time; a placeholder keeps Frames mode for the quote.
+    const params = { ...settings, first_frame: settings.first_frame ?? (chain_previous ? "chain_previous" : undefined) };
+    const job = this.queue.add({ ...params, quote_only: true, output_dir: OUTPUT_ROOT, file_stem: "quote" });
+    const deadline = Date.now() + QUOTE_TIMEOUT_MS;
+    while (job.status === "queued" || job.status === "running") {
+      if (Date.now() > deadline) {
+        this.queue.cancel(job.id);
+        throw new Error(`Timed out after ${QUOTE_TIMEOUT_MS / 60000} min waiting for Flow's credit quote (job ${job.id}); nothing was generated.`);
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
     if (job.status !== "done") throw new Error(job.error ?? `Quote job ${job.status}.`);
     return { credits: job.credits ?? 0 };
   }

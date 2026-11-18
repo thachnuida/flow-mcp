@@ -10,8 +10,10 @@ if (role === "none") {
   console.error(`Port ${PORT} is used by another program. Set FLOW_MCP_PORT to a free port.`);
   process.exit(1);
 }
+// Exit codes: 1 = port held by another program (or never confirmed), 2 = another flow-mcp already owns the port. Never 0
+// here, so a launcher cannot mistake an existing (possibly older) owner for the one it started.
 if (role === "client") {
-  console.error(`flow-mcp is already serving on http://127.0.0.1:${PORT}; nothing to start.`);
-  process.exit(0);
+  console.error(`Another flow-mcp (or an unconfirmed holder) already owns port ${PORT}; this process did not start an API.`);
+  process.exit(2);
 }
 console.log(`flow-mcp owner API listening on http://127.0.0.1:${PORT} (token: ${TOKEN_FILE}). Ctrl+C to stop.`);
