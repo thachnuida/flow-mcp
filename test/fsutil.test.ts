@@ -36,3 +36,12 @@ test("moveFile_rethrows_other_errors", () => {
   const d = tmp();
   assert.throws(() => moveFileWith({ renameSync, copyFileSync, unlinkSync }, join(d, "missing"), join(d, "b")), /ENOENT/);
 });
+
+test("moveFile_succeeds_when_unlink_fails_after_copy", () => {
+  const d = tmp();
+  writeFileSync(join(d, "a"), "copied");
+  const failUnlink = () => { throw Object.assign(new Error("busy"), { code: "EBUSY" }); };
+  moveFileWith({ renameSync: exdev, copyFileSync, unlinkSync: failUnlink }, join(d, "a"), join(d, "b"));
+  assert.equal(readFileSync(join(d, "b"), "utf8"), "copied");
+  assert.equal(readFileSync(join(d, "a"), "utf8"), "copied"); // left behind, not lost
+});
