@@ -63,7 +63,26 @@ async function clearBackdrops(page: Page): Promise<void> {
 
 // The agent's own image model, set to the newest Nano Banana like single images. Best effort: a batch never fails over it.
 async function pickAgentImageModel(page: Page): Promise<void> {
-  const button = page.locator("flow-agent-panel").getByRole("button", { name: "Image generation default model" });
+  const panel = page.locator("flow-agent-panel");
+  const modelRadios = panel.getByRole("radiogroup", { name: "Model" }).getByRole("radio");
+  if (await modelRadios.first().isVisible().catch(() => false)) {
+    const names = await modelRadios
+      .evaluateAll((els) =>
+        els.map((el) =>
+          (el.getAttribute("aria-label") || el.closest("mat-radio-button, label")?.textContent || el.textContent || "")
+            .replace(/\s+/g, " ")
+            .trim(),
+        ),
+      )
+      .catch(() => [] as string[]);
+    const index = newestNanoBanana(names);
+    if (index >= 0 && !(await modelRadios.nth(index).isChecked().catch(() => true))) {
+      await modelRadios.nth(index).click({ timeout: 4000 }).catch(() => {});
+      await pause(page, 400);
+    }
+    return;
+  }
+  const button = panel.getByRole("button", { name: "Image generation default model" });
   if (!(await button.isVisible().catch(() => false))) return;
   await button.click({ timeout: 5000 }).catch(() => {});
   const items = page.getByRole("menuitem");
@@ -77,13 +96,13 @@ async function pickAgentImageModel(page: Page): Promise<void> {
   await clearBackdrops(page);
 }
 
-// The agent settings panel replaces the composer, hiding the Agent button; Back closes it without saving.
+// The agent settings panel replaces the composer, hiding the Agent toggle; Back closes subviews (e.g. Image defaults) and the panel.
 async function closeAgentSettings(page: Page): Promise<void> {
   const back = page.locator("flow-agent-panel").getByRole("button", { name: "Back", exact: true });
-  if (await back.isVisible().catch(() => false)) {
+  for (let i = 0; i < 3 && (await back.isVisible().catch(() => false)); i++) {
     await clearBackdrops(page);
     await back.click({ timeout: 5000 }).catch(() => {});
-    await pause(page, 800);
+    await pause(page, 600);
   }
 }
 
@@ -1156,8 +1175,7 @@ export async function runQuote(job: Job): Promise<string[]> {
   if (!state.signedIn || !state.inProject) throw new Error(state.hint);
   const page = await getFlowPage();
   await ensureProjectGrid(page);
-  const agent = page.getByRole("button", { name: "Agent", exact: true });
-  if ((await agent.getAttribute("aria-pressed")) === "true") await agent.click();
+  await setAgentMode(page, false);
   job.credits = await applySettings(page, job);
   return [];
 }
@@ -1170,8 +1188,7 @@ export async function runGeneration(job: Job): Promise<string[]> {
   const s = job.params;
 
   await ensureProjectGrid(page);
-  const agent = page.getByRole("button", { name: "Agent", exact: true });
-  if ((await agent.getAttribute("aria-pressed")) === "true") await agent.click();
+  await setAgentMode(page, false);
   const clear = page.getByRole("button", { name: "Clear prompt" });
   if (await clear.isVisible().catch(() => false)) await clear.click();
 
@@ -1709,25 +1726,46 @@ export async function runEdit(job: Job): Promise<string[]> {
   return saved;
 }
 
+// Flow replaced the old "Agent" chip with a <flow-agent-mode-switch> slide toggle ("Flow Agent", aria-pressed).
+// Matches the new slide toggle (including role="switch" / aria-checked if adopted) as well as the legacy "Agent" button.
+const agentToggle = (page: Page) =>
+  page
+    .locator('flow-agent-mode-switch button, flow-agent-mode-switch [role="switch"]')
+    .or(page.getByRole("switch", { name: /^(Flow )?Agent$/i }))
+    .or(page.getByRole("button", { name: /^(Flow )?Agent$/ }))
+    .first();
+
+async function readAgentMode(agent: Locator): Promise<boolean | null> {
+  if (!(await agent.isVisible().catch(() => false))) return null;
+  const pressed = await agent.getAttribute("aria-pressed", { timeout: 2000 }).catch(() => null);
+  if (pressed === "true" || pressed === "false") return pressed === "true";
+  const checked = await agent.getAttribute("aria-checked", { timeout: 2000 }).catch(() => null);
+  if (checked === "true" || checked === "false") return checked === "true";
+  return await agent.evaluate((el) => el.classList.contains("checked")).catch(() => null);
+}
+
 // The agent session panel hides the composer, so a toggle attempted underneath it does nothing at all. Leaving agent
 // mode on then breaks the NEXT job, which expects the plain composer - a free character build failed that way. So this
 // confirms the toggle actually landed rather than assuming the click worked.
 async function setAgentMode(page: Page, on: boolean): Promise<void> {
-  const agent = page.getByRole("button", { name: "Agent", exact: true });
+  const agent = agentToggle(page);
   // Playwright says why a click did not land ("<div ...> intercepts pointer events", "element is not visible"); keep
   // that, so a failure names what was in the way instead of guessing.
   let why = "";
   for (let attempt = 0; attempt < 3; attempt++) {
     await clearBackdrops(page);
     await closeAgentSettings(page);
-    if (((await agent.getAttribute("aria-pressed").catch(() => null)) === "true") === on) return;
+    const current = await readAgentMode(agent);
+    if (current === on) return;
+    if (current === null && !on && (await settingsTrigger(page).isVisible().catch(() => false))) return;
     await agent.click({ timeout: 8000 }).catch((err: Error) => {
       const lines = err.message.split("\n").map((l) => l.trim());
       why = (lines.find((l) => /intercepts pointer events|not visible|not enabled|detached|not stable/.test(l)) ?? lines[0]).slice(0, 200);
     });
     await pause(page, 1500);
   }
-  if (((await agent.getAttribute("aria-pressed").catch(() => null)) === "true") !== on) {
+  const finalState = await readAgentMode(agent);
+  if (finalState !== on && !(finalState === null && !on && (await settingsTrigger(page).isVisible().catch(() => false)))) {
     throw new Error(`Could not switch Agent mode ${on ? "on" : "off"}${why ? ` (${why})` : "; the click landed but the toggle did not change"}.`);
   }
 }
@@ -1735,22 +1773,43 @@ async function setAgentMode(page: Page, on: boolean): Promise<void> {
 // "Never" lets the agent generate without asking; it is switched back to "Always" as soon as the batch ends.
 async function setAgentSettings(page: Page, confirm: "Always" | "Never", imageAspect?: string): Promise<void> {
   // Scoped to the prompt box: Flow added a second "Settings" button to the top bar ("View settings", seen 2026-10-13),
-  // and an unscoped lookup matched both and failed every agent batch.
+  // and renamed the prompt box's button to "Agent settings" alongside the slide toggle UI update.
   await clearBackdrops(page);
-  await page.locator("flow-base-prompt-box").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator("flow-base-prompt-box").getByRole("button", { name: /^(Agent settings|Settings)$/ }).click();
   try {
+    const panel = page.locator("flow-agent-panel");
     await page.getByRole("heading", { name: "Agent settings" }).waitFor({ state: "visible", timeout: 8000 });
-    await page.getByRole("radio", { name: new RegExp(`^${confirm}`) }).click();
+    const confirmRadio = panel.getByRole("radio", { name: new RegExp(`^${confirm}`) });
+    if (!(await confirmRadio.isChecked().catch(() => false))) {
+      await confirmRadio.click();
+      await pause(page, 300);
+    }
     if (imageAspect) {
-      await page.getByRole("radio", { name: imageAspect, exact: true }).first().click();
-      await page.getByRole("radio", { name: "x1", exact: true }).first().click();
+      const imageDefaults = panel.getByRole("button", { name: /^Image defaults/ });
+      if (await imageDefaults.isVisible().catch(() => false)) {
+        await imageDefaults.click();
+        await panel.getByRole("heading", { name: "Image defaults" }).waitFor({ state: "visible", timeout: 5000 });
+      }
+      const aspectRadio = panel.getByRole("radio", { name: imageAspect, exact: true }).first();
+      if (!(await aspectRadio.isChecked().catch(() => false))) {
+        await aspectRadio.click();
+        await pause(page, 200);
+      }
+      const countRadio = panel.getByRole("radio", { name: "x1", exact: true }).first();
+      if (!(await countRadio.isChecked().catch(() => false))) {
+        await countRadio.click();
+        await pause(page, 200);
+      }
       await pickAgentImageModel(page);
     }
     await pause(page, 300);
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await pause(page, 1200);
+    const save = panel.getByRole("button", { name: "Save", exact: true });
+    if (await save.isVisible().catch(() => false)) {
+      await save.click();
+      await pause(page, 1200);
+    }
   } finally {
-    // Saved or not, never leave the panel covering the composer: the next step needs the Agent button.
+    // Saved or not, never leave the panel covering the composer: the next step needs the Agent toggle.
     await closeAgentSettings(page);
   }
 }

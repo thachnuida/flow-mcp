@@ -724,3 +724,11 @@ The preview tool could not read the project while it lived in ~/Desktop; check t
   matches on the rest at a 0.3 threshold (unit-checked: 4/4 right). (2) After the drag, the collection page did not
   list the just-moved images until reloaded, so the tool thought the move failed and then tried to re-select images no
   longer in the grid ("None of the 1 image(s) could be selected"). It now reloads the collection before counting.
+- AGENT SLIDE TOGGLE + SETTINGS PANEL UPDATE (2026-11-20, verified live, 0 credits): Flow replaced the old `Agent` chip
+  with `<flow-agent-mode-switch><button class="... switch" aria-label="Flow Agent" aria-pressed="false|true">` (tooltip
+  "Turn on Flow Agent"). `runQuote`, `runGeneration`, and `setAgentMode` now all go through `agentToggle()` +
+  `readAgentMode()` + `setAgentMode()` (supports the new slide toggle, `role="switch"` / `aria-checked`, legacy `Agent`
+  button, and skips if no toggle exists while the normal `Settings trigger` is visible). In Agent ON mode, the prompt
+  box's settings button is now `Agent settings` (was `Settings`); inside `flow-agent-panel`, changes auto-save (no `Save`
+  button), and image defaults moved into a subview (`Image defaults` -> radiogroups for `Model`, aspect ratio, outputs),
+  so `setAgentSettings`, `pickAgentImageModel`, and `closeAgentSettings` (multi-level `Back` loop) were updated too.
